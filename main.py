@@ -8,7 +8,6 @@ from email.mime.text import MIMEText
 from datetime import datetime
 from pycdlib import PyCdlib
 from tqdm import tqdm
-from concurrent.futures import ThreadPoolExecutor
 import psutil
 import json
 
@@ -72,7 +71,7 @@ def load_state():
 
 def process_file(iso, file_path, rel_path, verbose):
     try:
-        iso.add_file(file_path, f"/{rel_path.upper().replace(os.sep, '/')}")
+        iso.add_file(file_path, f"/{rel_path.replace(os.sep, '/')}")
         if verbose:
             logging.info(f"Added: {rel_path}")
     except Exception as e:
@@ -118,39 +117,34 @@ def create_iso_pycdlib(source, output, label="ISO_LABEL", verbose=False, exclude
         state = load_state()
         processed_files = state.get("processed_files", set())
 
-        with ThreadPoolExecutor() as executor:
-            futures = []
-            for root, dirs, files in os.walk(source):
-                for file in tqdm(files, desc="Processing files"):
-                    full_path = os.path.join(root, file)
-                    rel_path = os.path.relpath(full_path, start=source)
+        for root, dirs, files in os.walk(source):
+            for file in tqdm(files, desc="Processing files"):
+                full_path = os.path.join(root, file)
+                rel_path = os.path.relpath(full_path, start=source)
 
-                    if not include_hidden and file.startswith('.'):
-                        continue
+                if not include_hidden and file.startswith('.'):
+                    continue
 
-                    if exclude and any(excluded in rel_path for excluded in exclude):
-                        continue
+                if exclude and any(excluded in rel_path for excluded in exclude):
+                    continue
 
-                    if include and not any(rel_path.endswith(inc) for inc in include):
-                        continue
+                if include and not any(rel_path.endswith(inc) for inc in include):
+                    continue
 
-                    if rel_path in processed_files:
-                        continue
+                if rel_path in processed_files:
+                    continue
 
-                    file_size = os.path.getsize(full_path)
-                    if max_size and (total_size + file_size > max_size):
-                        logging.warning(f"File {rel_path} skipped due to exceeding max size limit.")
-                        continue
+                file_size = os.path.getsize(full_path)
+                if max_size and (total_size + file_size > max_size):
+                    logging.warning(f"File {rel_path} skipped due to exceeding max size limit.")
+                    continue
 
-                    if dry_run:
-                        file_list.append(rel_path)
-                        continue
+                if dry_run:
+                    file_list.append(rel_path)
+                    continue
 
-                    total_size += file_size
-                    futures.append(executor.submit(process_file, iso, full_path, rel_path, verbose))
-
-            for future in tqdm(futures, desc="Adding files to ISO"):
-                future.result()
+                total_size += file_size
+                process_file(iso, full_path, rel_path, verbose)
 
         if dry_run:
             logging.info("Dry Run: The following files would be added:")
@@ -193,7 +187,7 @@ def main():
     parser.add_argument("--max-size", type=int, help="Maximum ISO size in bytes.")
     parser.add_argument("--dry-run", action="store_true", help="Simulate ISO creation.")
     parser.add_argument("--checksum", choices=['sha256', 'sha1', 'md5'], default="sha256", help="Checksum algorithm.")
-    parser.add_argument("--include-hidden", action="store_true", help="Include hidden files in the ISO.")
+    parser.add_argument("--include-hidden", action="store_true", help="Include hidden files in the ISO.", default=True)
     parser.add_argument("--email", type=str, help="Email address for notifications.")
 
     args = parser.parse_args()
