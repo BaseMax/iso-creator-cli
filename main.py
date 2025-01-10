@@ -69,9 +69,9 @@ def load_state():
             return json.load(f)
     return {}
 
-def process_file(iso, file_path, rel_path, verbose):
+def process_file(iso, file_path, rel_path, udf_path, verbose):
     try:
-        iso.add_file(file_path, f"/{rel_path.replace(os.sep, '/')}")
+        iso.add_fp(open(file_path, 'rb'), os.path.getsize(file_path), f"/{rel_path.replace(os.sep, '/')};1", udf_path=udf_path)
         if verbose:
             logging.info(f"Added: {rel_path}")
     except Exception as e:
@@ -104,10 +104,10 @@ def compress_iso(output, compression):
 
 def create_iso_pycdlib(source, output, label="ISO_LABEL", verbose=False, exclude=None, include=None,
                        compression=None, max_size=None, dry_run=False, checksum_algo="sha256",
-                       include_hidden=False, email=None):
+                       include_hidden=False, email=None, udf=False):
     iso = PyCdlib()
     try:
-        iso.new(vol_ident=label)
+        iso.new(vol_ident=label, udf='2.60' if udf else None)
         total_size = 0
         file_list = []
 
@@ -121,6 +121,8 @@ def create_iso_pycdlib(source, output, label="ISO_LABEL", verbose=False, exclude
             for file in tqdm(files, desc="Processing files"):
                 full_path = os.path.join(root, file)
                 rel_path = os.path.relpath(full_path, start=source)
+
+                udf_path = f"/{rel_path.replace(os.sep, '/')}" if udf else None
 
                 if not include_hidden and file.startswith('.'):
                     continue
@@ -144,7 +146,7 @@ def create_iso_pycdlib(source, output, label="ISO_LABEL", verbose=False, exclude
                     continue
 
                 total_size += file_size
-                process_file(iso, full_path, rel_path, verbose)
+                process_file(iso, full_path, rel_path, udf_path, verbose)
 
         if dry_run:
             logging.info("Dry Run: The following files would be added:")
@@ -189,6 +191,7 @@ def main():
     parser.add_argument("--checksum", choices=['sha256', 'sha1', 'md5'], default="sha256", help="Checksum algorithm.")
     parser.add_argument("--include-hidden", action="store_true", help="Include hidden files in the ISO.", default=True)
     parser.add_argument("--email", type=str, help="Email address for notifications.")
+    parser.add_argument("--udf", action="store_true", help="Create an ISO with UDF format.")
 
     args = parser.parse_args()
 
@@ -207,7 +210,8 @@ def main():
         dry_run=args.dry_run,
         checksum_algo=args.checksum,
         include_hidden=args.include_hidden,
-        email=args.email
+        email=args.email,
+        udf=args.udf
     )
 
 if __name__ == "__main__":
