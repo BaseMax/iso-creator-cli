@@ -46,56 +46,48 @@ python iso_creator.py -s SOURCE_DIR -o OUTPUT_FILE [OPTIONS]
 
 - `-l, --label`: The label for the ISO. If not provided, the source directory name is used.
 - `-v, --verbose`: Enable verbose output.
-- `-e, --exclude`: Exclude specific files or directories from the ISO.
-- `-i, --include`: Include only specific file extensions (e.g., `.txt .jpg`).
-- `-c, --compression`: Compress the ISO file. Available options are `gz`, `bz2`, or `xz`.
-- `--max-size`: Set a maximum size for the ISO file in bytes.
-- `--dry-run`: Simulate ISO creation without writing the file.
-- `--checksum`: Choose a checksum algorithm. Options are `sha256`, `sha1`, or `md5`. Default is `sha256`.
-- `--include-hidden`: Include hidden files (those starting with a dot) in the ISO.
-- `--email`: Email address to receive notifications once the ISO creation is complete.
+- `--include-hidden`: Include hidden files in the ISO.
+- `--exclude-dirs`: Exclude specific directories (comma-separated).
+- `--exclude-files`: Exclude specific files (comma-separated).
+- `--dry-run`: Simulate the process without actually creating the ISO file.
+- `--email`: The email address to send notifications to upon successful creation.
+- `--compress`: Compress files before adding them to the ISO.
+- `--compression-method`: Choose a compression method (options: zip, tar.gz, tar.bz2, tar.xz, 7z).
+- `--multi-thread`: Use multithreading for faster file processing.
 
 ### Examples
 
-1. **Basic ISO Creation**:
+1. **Create an ISO file from a directory:**
 
-    Create an ISO from the source directory `/path/to/source` and output it to `/path/to/output.iso`:
-
-    ```
-    python iso_creator.py -s /path/to/source -o /path/to/output.iso
+    ```bash
+    python iso_creator.py -s /path/to/source -o output.iso
     ```
 
+2. **Create a compressed ISO with .tar.gz compression:**
 
-2. **ISO Creation with Compression**:  
-
-    Create an ISO with compression (`xz` format) from `/path/to/source` to `/path/to/output.iso`:
-
-    ```
-    python iso_creator.py -s /path/to/source -o /path/to/output.iso -c xz
+    ```bash
+    python iso_creator.py -s /path/to/source -o output.iso --compress --compression-method tar.gz
     ```
 
-3. **ISO Creation with Specific Label and Checksum**:  
+3. **Perform a dry-run (simulate creation):**
 
-    Create an ISO with a custom label and `sha1` checksum algorithm:
-
-    ```
-    python iso_creator.py -s /path/to/source -o /path/to/output.iso -l MyISO -c sha1
+    ```bash
+    python iso_creator.py -s /path/to/source -o output.iso --dry-run
     ```
 
-4. **Include Specific File Types**:  
+4. **Send email notification upon successful creation:**
 
-    Include only `.txt` and `.jpg` files in the ISO:
-    
+    ```bash
+    python iso_creator.py -s /path/to/source -o output.iso --email your_email@example.com
     ```
-    python iso_creator.py -s /path/to/source -o /path/to/output.iso -i .txt .jpg
-    ```
+
 
 5. **Exclude Specific Files or Directories**:
     
     Exclude files in the `temp` directory from the ISO:
     
     ```
-    python iso_creator.py -s /path/to/source -o /path/to/output.iso -e temp
+    python iso_creator.py -s /path/to/source -o /path/to/output.iso --exclude-dirs temp
     ```
 
 6. **Dry Run**:
@@ -106,16 +98,10 @@ python iso_creator.py -s SOURCE_DIR -o OUTPUT_FILE [OPTIONS]
     python iso_creator.py -s /path/to/source -o /path/to/output.iso --dry-run
     ```
 
-7. **Email Notification**:
-    
-    Send an email notification upon successful ISO creation:
-    
-    ```
-    python iso_creator.py -s /path/to/source -o /path/to/output.iso --email your_email@example.com
-    ```
-
 ### License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for more details.
+
+Read more https://clalancette.github.io/pycdlib/pycdlib-api.html
 
 Copyright 2025, Max Base

@@ -131,9 +131,17 @@ def compress_file(file_data, method, file_name):
 def add_directory(iso, dir_path, base_path='/', name_mapping=None, compress=False, method='zip', pbar=None, include_hidden=False, exclude_files=None, exclude_dirs=None):
     """Adds files and directories to the ISO."""
     for root, dirs, files in os.walk(dir_path):
-        if exclude_dirs:
-            dirs[:] = [d for d in dirs if d not in exclude_dirs]
-        
+        for dir_name in dirs:
+            if exclude_dirs and dir_name in exclude_dirs:
+                dirs.remove(dir_name)
+                continue
+            else:
+                dir_full_path = os.path.join(root, dir_name)
+                dir_in_iso = os.path.join(base_path, os.path.relpath(dir_full_path, dir_path)).replace(os.sep, '/')
+                sanitized_dir_in_iso = generate_random_filename()
+                name_mapping[dir_in_iso] = sanitized_dir_in_iso
+                iso.add_directory(f'/{sanitized_dir_in_iso}', udf_path=f'/{dir_in_iso}')
+
         for file_name in files:
             if exclude_files and file_name in exclude_files:
                 continue
