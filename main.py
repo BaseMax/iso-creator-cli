@@ -15,6 +15,9 @@ import json
 import argparse
 import threading
 import zipfile
+import tarfile
+import lzma
+import py7zr
 
 TEMP_STATE_FILE = "iso_creator_state.json"
 
@@ -85,7 +88,33 @@ def load_state():
             return json.load(f)
     return {}
 
-def add_directory(iso, dir_path, base_path='/', name_mapping=None, compress=False, pbar=None):
+def compress_file(file_data, method, file_name):
+    compressed_data = BytesIO()
+    if method == 'zip':
+        with zipfile.ZipFile(compressed_data, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            zipf.writestr(file_name, file_data)
+    elif method == 'tar.gz':
+        with tarfile.open(fileobj=compressed_data, mode='w:gz') as tarf:
+            fileobj = BytesIO(file_data)
+            tarf.addfile(tarf.addfile(fileobj, arcname=file_name))
+    elif method == 'tar.bz2':
+        with tarfile.open(fileobj=compressed_data, mode='w:bz2') as tarf:
+            fileobj = BytesIO(file_data)
+            tarf.addfile(tarf.addfile(fileobj, arcname=file_name))
+    elif method == 'tar.xz':
+        with tarfile.open(fileobj=compressed_data, mode='w:xz') as tarf:
+            fileobj = BytesIO(file_data)
+            tarf.addfile(tarf.addfile(fileobj, arcname=file_name))
+    elif method == '7z':
+        with py7zr.SevenZipFile(compressed_data, mode='w') as archive:
+            archive.write([file_name], arcname=file_name)
+    else:
+        raise ValueError("Unsupported compression method")
+
+    compressed_data.seek(0)
+    return compressed_data
+
+def add_directory(iso, dir_path, base_path='/', name_mapping=None, compress=False, method='zip', pbar=None):
     for root, dirs, files in os.walk(dir_path):
         for dir_name in dirs:
             dir_full_path = os.path.join(root, dir_name)
@@ -104,18 +133,15 @@ def add_directory(iso, dir_path, base_path='/', name_mapping=None, compress=Fals
                 file_data = f.read()
 
                 if compress:
-                    with BytesIO() as compressed_file:
-                        with zipfile.ZipFile(compressed_file, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                            zipf.writestr(file_name, file_data)
-                        compressed_file.seek(0)
-                        iso.add_fp(compressed_file, len(compressed_file.getvalue()), f'/{sanitized_file_in_iso}', udf_path=f'/{file_in_iso}')
+                    compressed_data = compress_file(file_data, method, file_name)
+                    iso.add_fp(compressed_data, len(compressed_data.getvalue()), f'/{sanitized_file_in_iso}', udf_path=f'/{file_in_iso}')
                 else:
                     iso.add_fp(BytesIO(file_data), len(file_data), f'/{sanitized_file_in_iso}', udf_path=f'/{file_in_iso}')
             
             if pbar:
                 pbar.update(1)
 
-def create_iso_from_files_and_dirs(selected_files_dirs, iso_filename='new.iso', label="ISO_LABEL", verbose=False, include_hidden=False, email=None, compress=False):
+def create_iso_from_files_and_dirs(selected_files_dirs, iso_filename='new.iso', label="ISO_LABEL", verbose=False, include_hidden=False, email=None, compress=False, method='zip'):
     iso = pycdlib.PyCdlib()
     iso.new(vol_ident=label, udf='2.60')
     
@@ -125,7 +151,7 @@ def create_iso_from_files_and_dirs(selected_files_dirs, iso_filename='new.iso', 
     with tqdm(total=total_files, desc="Adding files to ISO", unit='file') as pbar:
         for item in selected_files_dirs:
             if os.path.isdir(item):
-                add_directory(iso, item, name_mapping=name_mapping, compress=compress, pbar=pbar)
+                add_directory(iso, item, name_mapping=name_mapping, compress=compress, method=method, pbar=pbar)
             elif os.path.isfile(item):
                 file_in_iso = '/' + generate_random_filename()  
                 name_mapping[item] = file_in_iso  
@@ -157,6 +183,8 @@ def main():
     parser.add_argument("--include-hidden", action="store_true", help="Include hidden files.", default=True)
     parser.add_argument("--email", type=str, help="Email address for notifications.")
     parser.add_argument("--compress", action="store_true", help="Compress files before adding them to the ISO.")
+    parser.add_argument("--compression-method", type=str, choices=['zip', 'tar.gz', 'tar.bz2', 'tar.xz', '7z'], default='zip', help="Compression method to use.")
+    parser.add_argument("--multi-thread", action="store_true", help="Use multi-threading for parallel file processing.")
 
     args = parser.parse_args()
 
@@ -166,15 +194,27 @@ def main():
     dir_size = estimate_directory_size(args.source)
     check_disk_space(dir_size)
 
-    create_iso_from_files_and_dirs(
-        selected_files_dirs=[args.source],
-        iso_filename=args.output,
-        label=args.label,
-        verbose=args.verbose,
-        include_hidden=args.include_hidden,
-        email=args.email,
-        compress=args.compress
-    )
+    if args.multi_thread:
+        logging.info("Multi-threading enabled. Using threads to process files.")
+        threads = []
+        for item in args.source:
+            thread = threading.Thread(target=create_iso_from_files_and_dirs, args=(item, args.output, args.label, args.verbose, args.include_hidden, args.email, args.compress, args.compression_method))
+            threads.append(thread)
+            thread.start()
+        
+        for thread in threads:
+            thread.join()
+    else:
+        create_iso_from_files_and_dirs(
+            selected_files_dirs=[args.source],
+            iso_filename=args.output,
+            label=args.label,
+            verbose=args.verbose,
+            include_hidden=args.include_hidden,
+            email=args.email,
+            compress=args.compress,
+            method=args.compression_method
+        )
 
 if __name__ == "__main__":
     main()
