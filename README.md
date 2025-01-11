@@ -102,6 +102,6 @@ python iso_creator.py -s SOURCE_DIR -o OUTPUT_FILE [OPTIONS]
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for more details.
 
-Read more https://clalancette.github.io/pycdlib/pycdlib-api.html
+Read more https://clalancette.github.io/pycdlib/pycdlib-api.html and https://clalancette.github.io/pycdlib/example-creating-udf-iso.html
 
 Copyright 2025, Max Base
