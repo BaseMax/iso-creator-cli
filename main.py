@@ -4,13 +4,17 @@ import string
 from io import BytesIO
 import pycdlib
 import hashlib
+import shutil
 import logging
 import smtplib
 from email.mime.text import MIMEText
 from datetime import datetime
+from tqdm import tqdm
 import psutil
 import json
 import argparse
+import threading
+import zipfile
 
 TEMP_STATE_FILE = "iso_creator_state.json"
 
@@ -81,7 +85,7 @@ def load_state():
             return json.load(f)
     return {}
 
-def add_directory(iso, dir_path, base_path='/', name_mapping=None):
+def add_directory(iso, dir_path, base_path='/', name_mapping=None, compress=False, pbar=None):
     for root, dirs, files in os.walk(dir_path):
         for dir_name in dirs:
             dir_full_path = os.path.join(root, dir_name)
@@ -98,29 +102,41 @@ def add_directory(iso, dir_path, base_path='/', name_mapping=None):
 
             with open(file_full_path, 'rb') as f:
                 file_data = f.read()
-                iso.add_fp(BytesIO(file_data), len(file_data), f'/{sanitized_file_in_iso}', udf_path=f'/{file_in_iso}')
 
-def create_iso_from_files_and_dirs(selected_files_dirs, iso_filename='new.iso', label="ISO_LABEL", verbose=False, include_hidden=False, email=None):
+                if compress:
+                    with BytesIO() as compressed_file:
+                        with zipfile.ZipFile(compressed_file, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                            zipf.writestr(file_name, file_data)
+                        compressed_file.seek(0)
+                        iso.add_fp(compressed_file, len(compressed_file.getvalue()), f'/{sanitized_file_in_iso}', udf_path=f'/{file_in_iso}')
+                else:
+                    iso.add_fp(BytesIO(file_data), len(file_data), f'/{sanitized_file_in_iso}', udf_path=f'/{file_in_iso}')
+            
+            if pbar:
+                pbar.update(1)
+
+def create_iso_from_files_and_dirs(selected_files_dirs, iso_filename='new.iso', label="ISO_LABEL", verbose=False, include_hidden=False, email=None, compress=False):
     iso = pycdlib.PyCdlib()
     iso.new(vol_ident=label, udf='2.60')
     
     name_mapping = {}  
-    total_size = 0
-    file_list = []
+    total_files = sum([len(files) for _, _, files in os.walk(selected_files_dirs[0])])
     
-    for item in selected_files_dirs:
-        if os.path.isdir(item):
-            add_directory(iso, item, name_mapping=name_mapping)
-        elif os.path.isfile(item):
-            file_in_iso = '/' + generate_random_filename()  
-            name_mapping[item] = file_in_iso  
+    with tqdm(total=total_files, desc="Adding files to ISO", unit='file') as pbar:
+        for item in selected_files_dirs:
+            if os.path.isdir(item):
+                add_directory(iso, item, name_mapping=name_mapping, compress=compress, pbar=pbar)
+            elif os.path.isfile(item):
+                file_in_iso = '/' + generate_random_filename()  
+                name_mapping[item] = file_in_iso  
 
-            with open(item, 'rb') as f:
-                file_data = f.read()
-                iso.add_fp(BytesIO(file_data), len(file_data), file_in_iso, udf_path=file_in_iso)
-        else:
-            print(f"Skipping invalid item: {item}")
-
+                with open(item, 'rb') as f:
+                    file_data = f.read()
+                    iso.add_fp(BytesIO(file_data), len(file_data), file_in_iso, udf_path=file_in_iso)
+                pbar.update(1)
+            else:
+                logging.warning(f"Skipping invalid item: {item}")
+    
     iso.write(iso_filename)
     iso.close()
 
@@ -140,6 +156,7 @@ def main():
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output.")
     parser.add_argument("--include-hidden", action="store_true", help="Include hidden files.", default=True)
     parser.add_argument("--email", type=str, help="Email address for notifications.")
+    parser.add_argument("--compress", action="store_true", help="Compress files before adding them to the ISO.")
 
     args = parser.parse_args()
 
@@ -155,7 +172,8 @@ def main():
         label=args.label,
         verbose=args.verbose,
         include_hidden=args.include_hidden,
-        email=args.email
+        email=args.email,
+        compress=args.compress
     )
 
 if __name__ == "__main__":
