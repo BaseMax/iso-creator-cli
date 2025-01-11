@@ -1,3 +1,4 @@
+# python main.py -s ../Salam -o r.iso
 import os
 import random
 import string
@@ -127,22 +128,24 @@ def compress_file(file_data, method, file_name):
     compressed_data.seek(0)
     return compressed_data
 
-def add_directory(iso, dir_path, base_path='/', name_mapping=None, compress=False, method='zip', pbar=None):
+def add_directory(iso, dir_path, base_path='/', name_mapping=None, compress=False, method='zip', pbar=None, include_hidden=False, exclude_files=None, exclude_dirs=None):
     """Adds files and directories to the ISO."""
     for root, dirs, files in os.walk(dir_path):
-        for dir_name in dirs:
-            dir_full_path = os.path.join(root, dir_name)
-            dir_in_iso = os.path.join(base_path, os.path.relpath(dir_full_path, dir_path)).replace(os.sep, '/')
-            sanitized_dir_in_iso = generate_random_filename()
-            name_mapping[dir_in_iso] = sanitized_dir_in_iso
-            iso.add_directory(f'/{sanitized_dir_in_iso}', udf_path=f'/{dir_in_iso}')
+        if exclude_dirs:
+            dirs[:] = [d for d in dirs if d not in exclude_dirs]
         
         for file_name in files:
+            if exclude_files and file_name in exclude_files:
+                continue
+
+            if not include_hidden and file_name.startswith('.'):
+                continue
+
             file_full_path = os.path.join(root, file_name)
             if os.path.getsize(file_full_path) > MAX_FILE_SIZE:
                 logging.warning(f"Skipping large file: {file_name} (size exceeds limit).")
                 continue
-            
+
             file_in_iso = os.path.join(base_path, os.path.relpath(file_full_path, dir_path)).replace(os.sep, '/')
             sanitized_file_in_iso = generate_random_filename()
             name_mapping[file_in_iso] = sanitized_file_in_iso
@@ -159,7 +162,7 @@ def add_directory(iso, dir_path, base_path='/', name_mapping=None, compress=Fals
             if pbar:
                 pbar.update(1)
 
-def create_iso_from_files_and_dirs(selected_files_dirs, iso_filename='new.iso', label="ISO_LABEL", verbose=False, include_hidden=False, email=None, compress=False, method='zip'):
+def create_iso_from_files_and_dirs(selected_files_dirs, iso_filename='new.iso', label="ISO_LABEL", verbose=False, include_hidden=False, exclude_dirs=None, exclude_files=None, dry_run=False, compress=False, method='zip', email=None):
     """Creates the ISO file from selected files and directories."""
     iso = pycdlib.PyCdlib()
     iso.new(vol_ident=label, udf='2.60')
@@ -170,25 +173,29 @@ def create_iso_from_files_and_dirs(selected_files_dirs, iso_filename='new.iso', 
     with tqdm(total=total_files, desc="Adding files to ISO", unit='file') as pbar:
         for item in selected_files_dirs:
             if os.path.isdir(item):
-                add_directory(iso, item, name_mapping=name_mapping, compress=compress, method=method, pbar=pbar)
+                add_directory(iso, item, name_mapping=name_mapping, compress=compress, method=method, pbar=pbar, include_hidden=include_hidden, exclude_files=exclude_files, exclude_dirs=exclude_dirs)
             elif os.path.isfile(item):
                 file_in_iso = '/' + generate_random_filename()
                 name_mapping[item] = file_in_iso  
 
                 with open(item, 'rb') as f:
                     file_data = f.read()
-                    iso.add_fp(BytesIO(file_data), len(file_data), file_in_iso, udf_path=file_in_iso)
+                    if dry_run:
+                        logging.info(f"Dry-run: Adding {item}")
+                    else:
+                        iso.add_fp(BytesIO(file_data), len(file_data), file_in_iso, udf_path=file_in_iso)
                 pbar.update(1)
             else:
                 logging.warning(f"Skipping invalid item: {item}")
     
-    iso.write(iso_filename)
-    iso.close()
+    if not dry_run:
+        iso.write(iso_filename)
+        iso.close()
 
-    checksum = calculate_checksum(iso_filename)
-    logging.info(f"ISO created successfully. Checksum ({checksum})")
+        checksum = calculate_checksum(iso_filename)
+        logging.info(f"ISO created successfully. Checksum ({checksum})")
     
-    if email:
+    if not dry_run and email:
         send_email_notification("ISO Creation Successful", f"The ISO file has been created successfully. Checksum: {checksum}", email)
 
 def main():
@@ -200,7 +207,10 @@ def main():
     parser.add_argument("-o", "--output", type=validate_output_file, required=True, help="Output ISO file path.")
     parser.add_argument("-l", "--label", type=str, default=None, help="ISO label. Default: source directory name.")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output.")
-    parser.add_argument("--include-hidden", action="store_true", help="Include hidden files.", default=True)
+    parser.add_argument("--include-hidden", action="store_true", help="Include hidden files.", default=False)
+    parser.add_argument("--exclude-dirs", type=str, nargs="*", help="Exclude specific directories.")
+    parser.add_argument("--exclude-files", type=str, nargs="*", help="Exclude specific files.")
+    parser.add_argument("--dry-run", action="store_true", help="Simulate the process without creating the ISO.")
     parser.add_argument("--email", type=str, help="Email address for notifications.")
     parser.add_argument("--compress", action="store_true", help="Compress files before adding them to the ISO.")
     parser.add_argument("--compression-method", type=str, choices=COMPRESSION_METHODS, default='zip', help="Compression method to use.")
@@ -218,7 +228,7 @@ def main():
         logging.info("Multi-threading enabled. Using threads to process files.")
         threads = []
         for item in args.source:
-            thread = threading.Thread(target=create_iso_from_files_and_dirs, args=(item, args.output, args.label, args.verbose, args.include_hidden, args.email, args.compress, args.compression_method))
+            thread = threading.Thread(target=create_iso_from_files_and_dirs, args=(item, args.output, args.label, args.verbose, args.include_hidden, args.exclude_dirs, args.exclude_files, args.dry_run, args.compress, args.compression_method))
             threads.append(thread)
             thread.start()
         
@@ -231,6 +241,9 @@ def main():
             label=args.label,
             verbose=args.verbose,
             include_hidden=args.include_hidden,
+            exclude_dirs=args.exclude_dirs,
+            exclude_files=args.exclude_files,
+            dry_run=args.dry_run,
             email=args.email,
             compress=args.compress,
             method=args.compression_method
