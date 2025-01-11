@@ -1,0 +1,2 @@
+
+python main.py -s ../Salam -o r.iso

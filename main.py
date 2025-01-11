@@ -1,17 +1,31 @@
 import os
-import argparse
+import random
+import string
+from io import BytesIO
+import pycdlib
 import hashlib
 import shutil
 import logging
 import smtplib
 from email.mime.text import MIMEText
 from datetime import datetime
-from pycdlib import PyCdlib
 from tqdm import tqdm
 import psutil
 import json
+import argparse
 
 TEMP_STATE_FILE = "iso_creator_state.json"
+
+def generate_random_filename(length=8):
+    characters = string.ascii_uppercase + string.digits
+    return ''.join(random.choice(characters) for _ in range(length))
+
+def sanitize_filename(filename, max_length=8):
+    name, ext = os.path.splitext(filename)
+    sanitized_name = ''.join(c if c.isalnum() or c == '_' else '_' for c in name)[:max_length]
+    sanitized_ext = ''.join(c if c.isalnum() else '_' for c in ext)[:4]
+    result = sanitized_name.upper() + sanitized_ext.upper()
+    return result[:max_length]
 
 def validate_directory(path):
     if not os.path.isdir(path):
@@ -69,111 +83,54 @@ def load_state():
             return json.load(f)
     return {}
 
-def process_file(iso, file_path, rel_path, udf_path, verbose):
-    try:
-        iso.add_fp(open(file_path, 'rb'), os.path.getsize(file_path), f"/{rel_path.replace(os.sep, '/')};1", udf_path=udf_path)
-        if verbose:
-            logging.info(f"Added: {rel_path}")
-    except Exception as e:
-        logging.error(f"Failed to add file {rel_path}: {e}")
+def add_directory(iso, dir_path, base_path='/', name_mapping=None):
+    for root, dirs, files in os.walk(dir_path):
+        for dir_name in dirs:
+            dir_full_path = os.path.join(root, dir_name)
+            dir_in_iso = os.path.join(base_path, os.path.relpath(dir_full_path, dir_path)).replace(os.sep, '/')
+            sanitized_dir_in_iso = generate_random_filename()  
+            name_mapping[dir_in_iso] = sanitized_dir_in_iso
+            iso.add_directory(f'/{sanitized_dir_in_iso}', udf_path=f'/{dir_in_iso}')
+        
+        for file_name in files:
+            file_full_path = os.path.join(root, file_name)
+            file_in_iso = os.path.join(base_path, os.path.relpath(file_full_path, dir_path)).replace(os.sep, '/')
+            sanitized_file_in_iso = generate_random_filename()
+            name_mapping[file_in_iso] = sanitized_file_in_iso
 
-def compress_iso(output, compression):
-    compressed_output = f"{output}.{compression}"
-    try:
-        with open(output, 'rb') as src, open(compressed_output, 'wb') as dst:
-            if compression == 'gz':
-                import gzip
-                with gzip.GzipFile(fileobj=dst, mode='wb') as gz, tqdm(desc="Compressing ISO") as pbar:
-                    shutil.copyfileobj(src, gz, length=1024 * 1024)
-                    pbar.update(1024 * 1024)
-            elif compression == 'bz2':
-                import bz2
-                with bz2.BZ2File(dst, 'wb') as bz, tqdm(desc="Compressing ISO") as pbar:
-                    shutil.copyfileobj(src, bz, length=1024 * 1024)
-                    pbar.update(1024 * 1024)
-            elif compression == 'xz':
-                import lzma
-                with lzma.LZMAFile(dst, 'wb') as xz, tqdm(desc="Compressing ISO") as pbar:
-                    shutil.copyfileobj(src, xz, length=1024 * 1024)
-                    pbar.update(1024 * 1024)
-            else:
-                raise ValueError("Unsupported compression format")
-        logging.info(f"Compressed ISO: {compressed_output}")
-    except Exception as e:
-        logging.error(f"Compression failed: {e}")
+            with open(file_full_path, 'rb') as f:
+                file_data = f.read()
+                iso.add_fp(BytesIO(file_data), len(file_data), f'/{sanitized_file_in_iso}', udf_path=f'/{file_in_iso}')
 
-def create_iso_pycdlib(source, output, label="ISO_LABEL", verbose=False, exclude=None, include=None,
-                       compression=None, max_size=None, dry_run=False, checksum_algo="sha256",
-                       include_hidden=False, email=None, udf=False):
-    iso = PyCdlib()
-    try:
-        iso.new(vol_ident=label, udf='2.60' if udf else None)
-        total_size = 0
-        file_list = []
+def create_iso_from_files_and_dirs(selected_files_dirs, iso_filename='new.iso', label="ISO_LABEL", verbose=False, include_hidden=False, email=None):
+    iso = pycdlib.PyCdlib()
+    iso.new(vol_ident=label, udf='2.60')
+    
+    name_mapping = {}  
+    total_size = 0
+    file_list = []
+    
+    for item in selected_files_dirs:
+        if os.path.isdir(item):
+            add_directory(iso, item, name_mapping=name_mapping)
+        elif os.path.isfile(item):
+            file_in_iso = '/' + generate_random_filename()  
+            name_mapping[item] = file_in_iso  
 
-        dir_size = estimate_directory_size(source)
-        check_disk_space(dir_size)
+            with open(item, 'rb') as f:
+                file_data = f.read()
+                iso.add_fp(BytesIO(file_data), len(file_data), file_in_iso, udf_path=file_in_iso)
+        else:
+            print(f"Skipping invalid item: {item}")
 
-        state = load_state()
-        processed_files = state.get("processed_files", set())
+    iso.write(iso_filename)
+    iso.close()
 
-        for root, dirs, files in os.walk(source):
-            for file in tqdm(files, desc="Processing files"):
-                full_path = os.path.join(root, file)
-                rel_path = os.path.relpath(full_path, start=source)
-
-                udf_path = f"/{rel_path.replace(os.sep, '/')}" if udf else None
-
-                if not include_hidden and file.startswith('.'):
-                    continue
-
-                if exclude and any(excluded in rel_path for excluded in exclude):
-                    continue
-
-                if include and not any(rel_path.endswith(inc) for inc in include):
-                    continue
-
-                if rel_path in processed_files:
-                    continue
-
-                file_size = os.path.getsize(full_path)
-                if max_size and (total_size + file_size > max_size):
-                    logging.warning(f"File {rel_path} skipped due to exceeding max size limit.")
-                    continue
-
-                if dry_run:
-                    file_list.append(rel_path)
-                    continue
-
-                total_size += file_size
-                process_file(iso, full_path, rel_path, udf_path, verbose)
-
-        if dry_run:
-            logging.info("Dry Run: The following files would be added:")
-            for file in file_list:
-                logging.info(file)
-            return
-
-        iso.write(output)
-        iso.close()
-
-        if compression:
-            compress_iso(output, compression)
-
-        checksum = calculate_checksum(output, algo=checksum_algo)
-        logging.info(f"ISO image created successfully: {output}")
-        logging.info(f"Checksum ({checksum_algo}): {checksum}")
-
-        if email:
-            send_email_notification(
-                subject="ISO Creation Complete",
-                message=f"Your ISO file has been created successfully: {output}\nChecksum: {checksum}",
-                recipient=email,
-            )
-    except Exception as e:
-        logging.error(f"Error during ISO creation: {e}")
-        iso.close()
-        exit(1)
+    checksum = calculate_checksum(iso_filename)
+    logging.info(f"ISO created successfully. Checksum ({checksum})")
+    
+    if email:
+        send_email_notification("ISO Creation Successful", f"The ISO file has been created successfully. Checksum: {checksum}", email)
 
 def main():
     logging.basicConfig(filename="iso_creator.log", level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -183,35 +140,24 @@ def main():
     parser.add_argument("-o", "--output", type=validate_output_file, required=True, help="Output ISO file path.")
     parser.add_argument("-l", "--label", type=str, default=None, help="ISO label. Default: source directory name.")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output.")
-    parser.add_argument("-e", "--exclude", nargs="*", help="Exclude specific files or directories.")
-    parser.add_argument("-i", "--include", nargs="*", help="Include only specific file extensions (e.g., .txt .jpg).")
-    parser.add_argument("-c", "--compression", choices=['gz', 'bz2', 'xz'], help="Compress the ISO file.")
-    parser.add_argument("--max-size", type=int, help="Maximum ISO size in bytes.")
-    parser.add_argument("--dry-run", action="store_true", help="Simulate ISO creation.")
-    parser.add_argument("--checksum", choices=['sha256', 'sha1', 'md5'], default="sha256", help="Checksum algorithm.")
-    parser.add_argument("--include-hidden", action="store_true", help="Include hidden files in the ISO.", default=True)
+    parser.add_argument("--include-hidden", action="store_true", help="Include hidden files.", default=True)
     parser.add_argument("--email", type=str, help="Email address for notifications.")
-    parser.add_argument("--udf", action="store_true", help="Create an ISO with UDF format.")
 
     args = parser.parse_args()
 
     if args.label is None:
         args.label = datetime.now().strftime("ISO_%Y%m%d_%H%M%S")
 
-    create_iso_pycdlib(
-        source=args.source,
-        output=args.output,
+    dir_size = estimate_directory_size(args.source)
+    check_disk_space(dir_size)
+
+    create_iso_from_files_and_dirs(
+        selected_files_dirs=[args.source],
+        iso_filename=args.output,
         label=args.label,
         verbose=args.verbose,
-        exclude=args.exclude,
-        include=args.include,
-        compression=args.compression,
-        max_size=args.max_size,
-        dry_run=args.dry_run,
-        checksum_algo=args.checksum,
         include_hidden=args.include_hidden,
-        email=args.email,
-        udf=args.udf
+        email=args.email
     )
 
 if __name__ == "__main__":
