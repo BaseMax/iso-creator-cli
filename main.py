@@ -4,12 +4,10 @@ import string
 from io import BytesIO
 import pycdlib
 import hashlib
-import shutil
 import logging
 import smtplib
 from email.mime.text import MIMEText
 from datetime import datetime
-from tqdm import tqdm
 import psutil
 import json
 import argparse
