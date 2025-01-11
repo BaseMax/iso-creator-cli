@@ -1,4 +1,4 @@
-# python main.py -s ../Salam -o r.iso
+# python iso_creator.py -s ../Salam -o r.iso
 import os
 import random
 import string
